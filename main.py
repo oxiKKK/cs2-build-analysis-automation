@@ -233,17 +233,8 @@ def print_banner():
 
     ============================================================="""
 
-    # Use logger for banner output with green color for the banner itself
-    print("\033[92m" + banner + "\033[0m")
+    print("\033[97m" + banner + "\033[0m")
     print()
-
-    # Use the colored logging system for info messages
-    info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    info(
-        f"System: {os.name.upper()} | Python {'.'.join(map(str, sys.version_info[:3]))}"
-    )
-    info(f"Available CPU Cores: {os.cpu_count()}")
-    info("Initializing depot download and disassembly pipeline...")
 
 
 class DepotDownloader:
@@ -661,7 +652,6 @@ class DepotDownloader:
 
 
 def main() -> None:
-    # Print banner
     print_banner()
 
     parser = argparse.ArgumentParser(
@@ -747,6 +737,14 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    # Use the colored logging system for info messages
+    info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    info(
+        f"System: {os.name.upper()} | Python {'.'.join(map(str, sys.version_info[:3]))}"
+    )
+    info(f"Available CPU Cores: {os.cpu_count()}")
+    info("Initializing depot download and disassembly pipeline...")
 
     global verbose_log
     verbose_log = args.verbose
