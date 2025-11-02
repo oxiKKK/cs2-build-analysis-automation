@@ -1,7 +1,6 @@
 black
 pylint
 flake8
-steamctl
 coloredlogs
 tqdm
 psutil
