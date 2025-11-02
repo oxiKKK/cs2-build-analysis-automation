@@ -31,7 +31,7 @@ This tool can be used both for Linux and Windows binaries
 - Windows 10/11
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) package manager
-- [steamctl](https://github.com/ValvePython/steamctl)
+- [DepotDownloader](https://github.com/SteamRE/DepotDownloader) (auto-downloads if not present)
 - IDA Pro
 
 ## Installation
@@ -41,6 +41,17 @@ Create and activate virtual environment:
 ```bash
 uv venv; .venv/Scripts/activate; uv pip install -r requirements.txt
 ```
+
+### DepotDownloader Setup
+
+The script will automatically handle DepotDownloader for you:
+1. On first run, if DepotDownloader is not found, you'll be prompted to:
+   - **Auto-download**: The script will download the latest release from GitHub
+   - **Manual path**: Provide the path to an existing DepotDownloader executable
+2. The path is saved to `.config.json` for future runs
+3. You can also specify the path via `--depotdownloader-path` argument
+
+**Note**: DepotDownloader may prompt you to log in to Steam on first use. Your credentials will be cached for subsequent runs.
 
 ## Usage
 
@@ -75,6 +86,7 @@ python main.py --app X --depot X --manifest-id X --auto-confirm --verbose
 - `--output` / `-o`: Output directory (auto-generates platform-prefixed directory if not provided)
 - `--platform` / `-p`: Target binary format - `windows` (PE), `linux` (ELF), or `both` (default: windows)
 - `--ida-path` / `-i`: Path to IDA Pro executable (saves to config for future use)
+- `--depotdownloader-path`: Path to DepotDownloader executable (saves to config for future use)
 - `--files-to-disassemble` / `-f`: Specific files to disassemble using relative paths
 - `--jobs` / `-j`: Number of parallel disassembly jobs (default: CPU count)
 - `--auto-confirm` / `-y`: Skip confirmation prompts for automation

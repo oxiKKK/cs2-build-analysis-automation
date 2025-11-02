@@ -6,8 +6,10 @@ import sys
 import concurrent.futures
 import json
 import logging
-import time
 import psutil
+import platform
+import zipfile
+import urllib.request
 from pathlib import Path
 from tqdm import tqdm
 import coloredlogs
@@ -75,6 +77,207 @@ def save_files_config(files_config):
         logger.debug(f"Files configuration saved to {FILES_CONFIG_FILE}")
     except IOError as e:
         logger.warning(f"Failed to save files config file: {e}")
+
+
+def get_depotdownloader_path():
+    """Get the path to DepotDownloader executable."""
+    script_dir = Path(__file__).parent
+
+    # Check common locations
+    if sys.platform == "win32":
+        exe_name = "DepotDownloader.exe"
+    else:
+        exe_name = "DepotDownloader"
+
+    # Check in script directory
+    local_path = script_dir / exe_name
+    if local_path.exists():
+        return str(local_path)
+
+    # Check in DepotDownloader subdirectory
+    subdir_path = script_dir / "DepotDownloader" / exe_name
+    if subdir_path.exists():
+        return str(subdir_path)
+
+    return None
+
+
+def download_depotdownloader():
+    """Download DepotDownloader from GitHub releases."""
+    script_dir = Path(__file__).parent
+    depot_dir = script_dir / "DepotDownloader"
+
+    info("Downloading DepotDownloader from GitHub...")
+
+    try:
+        # Get latest release info from GitHub API
+        api_url = "https://api.github.com/repos/SteamRE/DepotDownloader/releases/latest"
+
+        with urllib.request.urlopen(api_url) as response:
+            release_data = json.loads(response.read().decode())
+
+        # Find the appropriate asset for the platform
+        asset_url = None
+        asset_name = None
+
+        machine = platform.machine().lower()
+        is_arm = "arm" in machine or "aarch64" in machine
+
+        for asset in release_data.get("assets", []):
+            name = asset["name"].lower()
+
+            if sys.platform == "win32":
+                # Windows x64
+                if (
+                    "windows" in name
+                    and "x64" in name
+                    and not "arm" in name
+                    and name.endswith(".zip")
+                ):
+                    asset_url = asset["browser_download_url"]
+                    asset_name = asset["name"]
+                    break
+                # Fallback: Windows without explicit x64 but not arm
+                elif "windows" in name and not "arm" in name and name.endswith(".zip"):
+                    asset_url = asset["browser_download_url"]
+                    asset_name = asset["name"]
+            elif sys.platform == "linux":
+                if is_arm:
+                    if "linux" in name and "arm64" in name and name.endswith(".zip"):
+                        asset_url = asset["browser_download_url"]
+                        asset_name = asset["name"]
+                        break
+                else:
+                    if (
+                        "linux" in name
+                        and "x64" in name
+                        and not "arm" in name
+                        and name.endswith(".zip")
+                    ):
+                        asset_url = asset["browser_download_url"]
+                        asset_name = asset["name"]
+                        break
+            elif sys.platform == "darwin":
+                if is_arm:
+                    if "macos" in name and "arm64" in name and name.endswith(".zip"):
+                        asset_url = asset["browser_download_url"]
+                        asset_name = asset["name"]
+                        break
+                else:
+                    if "macos" in name and "x64" in name and name.endswith(".zip"):
+                        asset_url = asset["browser_download_url"]
+                        asset_name = asset["name"]
+                        break
+
+        if not asset_url:
+            error("Could not find suitable DepotDownloader release for your platform")
+            error(f"Platform: {sys.platform}, Architecture: {machine}")
+            info("Available assets:")
+            for asset in release_data.get("assets", []):
+                info(f"  - {asset['name']}")
+            return False
+
+        info(f"Detected platform: {sys.platform}, Architecture: {machine}")
+        info(f"Downloading {asset_name}...")
+
+        # Create temporary directory for download
+        zip_path = script_dir / asset_name
+
+        # Download with progress bar
+        with urllib.request.urlopen(asset_url) as response:
+            total_size = int(response.headers.get("Content-Length", 0))
+            block_size = 8192
+
+            with open(zip_path, "wb") as out_file:
+                with tqdm(
+                    total=total_size, unit="B", unit_scale=True, desc="Downloading"
+                ) as pbar:
+                    while True:
+                        chunk = response.read(block_size)
+                        if not chunk:
+                            break
+                        out_file.write(chunk)
+                        pbar.update(len(chunk))
+
+        info("Extracting DepotDownloader...")
+
+        # Extract the zip file
+        depot_dir.mkdir(exist_ok=True)
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(depot_dir)
+
+        # Clean up zip file
+        zip_path.unlink()
+
+        # Find the executable
+        depot_path = get_depotdownloader_path()
+        if depot_path:
+            info(f"DepotDownloader successfully installed at: {depot_path}")
+            return depot_path
+        else:
+            error("DepotDownloader was extracted but executable not found")
+            return False
+
+    except Exception as e:
+        error(f"Failed to download DepotDownloader: {e}")
+        return False
+
+
+def ensure_depotdownloader(config):
+    """Ensure DepotDownloader is available, download if necessary."""
+    # Check if path is in config
+    depot_path = config.get("depotdownloader_path")
+
+    if depot_path and os.path.exists(depot_path):
+        info(f"Using DepotDownloader from config: {depot_path}")
+        return depot_path
+
+    # Check local installation
+    depot_path = get_depotdownloader_path()
+    if depot_path:
+        info(f"Found local DepotDownloader: {depot_path}")
+        config["depotdownloader_path"] = depot_path
+        save_config(config)
+        return depot_path
+
+    # Not found, ask user
+    info("DepotDownloader not found locally.")
+    info("DepotDownloader is required to download Steam depots.")
+    info("GitHub: https://github.com/SteamRE/DepotDownloader")
+
+    while True:
+        choice = input(
+            "\nWould you like to:\n  [1] Auto-download DepotDownloader\n  [2] Enter path to existing DepotDownloader executable\n  [3] Exit\nChoice: "
+        ).strip()
+
+        if choice == "1":
+            depot_path = download_depotdownloader()
+            if depot_path:
+                config["depotdownloader_path"] = depot_path
+                save_config(config)
+                return depot_path
+            else:
+                error("Failed to download DepotDownloader")
+                continue
+        elif choice == "2":
+            depot_path = input(
+                "Enter full path to DepotDownloader executable: "
+            ).strip()
+            if os.path.exists(depot_path):
+                info(f"Using DepotDownloader at: {depot_path}")
+                config["depotdownloader_path"] = depot_path
+                save_config(config)
+                return depot_path
+            else:
+                error(f"File not found: {depot_path}")
+                continue
+        elif choice == "3":
+            info("Exiting...")
+            return None
+        else:
+            warning("Invalid choice. Please enter 1, 2, or 3.")
+
+    return None
 
 
 def create_default_files_config():
@@ -245,6 +448,7 @@ class DepotDownloader:
         manifest_id: int,
         output_path: str,
         ida_path: str,
+        depotdownloader_path: str,
         files_to_disassemble: list[str] = None,
         jobs: int = -1,
         disassemble_all: bool = False,
@@ -256,23 +460,63 @@ class DepotDownloader:
         self._manifest_id = manifest_id
         self._output_path = output_path
         self._ida_path = ida_path
+        self._depotdownloader_path = depotdownloader_path
         self._files_to_disassemble = files_to_disassemble or []
         self._jobs = jobs
         self._disassemble_all = disassemble_all
         self._auto_confirm = auto_confirm
         self._platform = platform
 
-    def is_steamctl_installed(self) -> bool:
-        """Check if steamctl is installed."""
-        return shutil.which("steamctl") is not None
+    def is_depotdownloader_available(self) -> bool:
+        """Check if DepotDownloader is available."""
+        return os.path.exists(self._depotdownloader_path)
 
     def is_ida_installed(self) -> bool:
         """Check if IDA is installed."""
         return shutil.which(self._ida_path) is not None
 
+    def _create_filelist(self) -> str:
+        """
+        Create a filelist file for DepotDownloader to only download executable files.
+        Returns the path to the created filelist file.
+        """
+        script_dir = Path(__file__).parent
+        filelist_path = script_dir / ".depotdownloader_filelist.txt"
+
+        info("Creating filelist for executable files only...")
+
+        # Define regex patterns for executable files based on platform
+        patterns = []
+
+        if self._platform == "windows" or self._platform == "both":
+            # Match .dll and .exe files
+            patterns.append("regex:.*\\.dll$")
+            patterns.append("regex:.*\\.exe$")
+
+        if self._platform == "linux" or self._platform == "both":
+            # Match .so files (including versioned .so files like .so.1)
+            patterns.append("regex:.*\\.so(\\..*)?$")
+            # Match common executable paths in bin directories without extensions
+            patterns.append("regex:.*/bin/.*/[^/]*$")
+
+        # Write patterns to filelist
+        try:
+            with open(filelist_path, "w") as f:
+                for pattern in patterns:
+                    f.write(f"{pattern}\n")
+
+            info(f"Created filelist with {len(patterns)} pattern(s):")
+            for pattern in patterns:
+                verbose(f"  {pattern}")
+
+            return str(filelist_path)
+        except Exception as e:
+            error(f"Failed to create filelist: {e}")
+            return None
+
     def download(self) -> None:
         """
-        Downloads a Steam depot using steamctl.
+        Downloads a Steam depot using DepotDownloader.
 
         Parameters:
         - app_id: The ID of the app.
@@ -344,8 +588,8 @@ class DepotDownloader:
                     f"No {platform_desc} found in existing directory, will re-download"
                 )
 
-        if not self.is_steamctl_installed():
-            error("steamctl is not installed.")
+        if not self.is_depotdownloader_available():
+            error(f"DepotDownloader is not available at: {self._depotdownloader_path}")
             return
 
         if not self.is_ida_installed():
@@ -353,70 +597,103 @@ class DepotDownloader:
             return
 
         info(f"Starting download to: {self._output_path}")
+        info(f"Using DepotDownloader: {self._depotdownloader_path}")
+
+        # Create filelist for executable files only
+        filelist_path = self._create_filelist()
+        if not filelist_path:
+            error("Failed to create filelist, aborting download")
+            return
 
         try:
+            # DepotDownloader command format:
+            # DepotDownloader -app <appid> -depot <depotid> -manifest <manifestid> -dir <output> -filelist <filelist>
             command = [
-                "steamctl",
-                "--anonymous",
-                "depot",
-                "download",
-                "--app",
+                self._depotdownloader_path,
+                "-app",
                 str(self._app_id),
-                "--depot",
+                "-depot",
                 str(self._depot_id),
-                "--manifest",
+                "-manifest",
                 str(self._manifest_id),
-                "-o",
+                "-dir",
                 self._output_path,
+                "-filelist",
+                filelist_path,
             ]
 
-            result = subprocess.run(command, check=True)
+            info("Running DepotDownloader (this may take a while)...")
+            info("Downloading executable files only (.dll, .exe, .so)...")
+            info("You may be prompted to login to Steam if credentials are not cached.")
 
-            if result.returncode != 0:
-                error("stderr: %s", result.stderr)
+            # Run with real-time output
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1,
+            )
+
+            # Print output in real-time
+            for line in process.stdout:
+                print(line, end="")
+
+            process.wait()
+
+            if process.returncode != 0:
+                error(f"DepotDownloader failed with return code: {process.returncode}")
                 return
 
-            if result.stdout:
-                info("Command output:", result.stdout)
-            if result.stderr:
-                info("Command error (if any):", result.stderr)
+            info("Download completed successfully!")
         except subprocess.CalledProcessError as e:
             error("Exception:", e)
             info("Output:", e.output)
-            info("Error output:", e.stderr)
+            if e.stderr:
+                info("Error output:", e.stderr)
+        except Exception as e:
+            error(f"Failed to run DepotDownloader: {e}")
+            return
 
         self._post_download()
 
     def _post_download(self) -> None:
-        self._filter_downloaded_files()
+        # No need to filter since we're using filelist to download only executables
+        info("Download complete, proceeding to disassembly...")
         self._disassemble()
 
     def _filter_downloaded_files(self) -> None:
         """
         Filters the downloaded files to only include the ones that are needed.
+        Note: This is now mostly obsolete since we use filelist, but kept for backwards compatibility
+        with existing output directories that may contain .vpk files.
         """
-        info("Filtering downloaded files...")
+        info("Checking for non-executable files to clean up...")
 
+        files_deleted = 0
         for root, dirs, files in os.walk(self._output_path):
             for file in files:
                 if file.endswith(".vpk"):
                     file_path = os.path.join(root, file)
                     try:
                         os.remove(file_path)
+                        files_deleted += 1
                         verbose(f"Deleted: {file_path}")
                     except Exception as e:
                         warning(f"Failed to delete {file_path}: {e}")
 
-        # delete empty directories
-        for root, dirs, files in os.walk(self._output_path, topdown=False):
-            for dir in dirs:
-                dir_path = os.path.join(root, dir)
-                try:
-                    if not os.listdir(dir_path):  # Check if directory is empty
-                        os.rmdir(dir_path)
-                        verbose(f"Deleted empty directory: {dir_path}")
-                except Exception as e:
-                    warning(f"Failed to delete directory {dir_path}: {e}")
+        if files_deleted > 0:
+            info(f"Cleaned up {files_deleted} non-executable file(s)")
+            # delete empty directories
+            for root, dirs, files in os.walk(self._output_path, topdown=False):
+                for dir in dirs:
+                    dir_path = os.path.join(root, dir)
+                    try:
+                        if not os.listdir(dir_path):  # Check if directory is empty
+                            os.rmdir(dir_path)
+                            verbose(f"Deleted empty directory: {dir_path}")
+                    except Exception as e:
+                        warning(f"Failed to delete directory {dir_path}: {e}")
 
     def _disassemble(self) -> None:
         """
@@ -682,13 +959,18 @@ def main() -> None:
         "--output",
         "-o",
         type=str,
-        help="The path where the depot should be saved. If not provided, will generate ./output_YYYY-MM-DD automatically.",
+        help="The path where the depot should be saved. If not provided, will generate ./output/output_YYYY-MM-DD automatically.",
     )
     parser.add_argument(
         "--ida-path",
         "-i",
         type=str,
         help="The path where the ida executable is stored. If not provided, will use saved path or prompt.",
+    )
+    parser.add_argument(
+        "--depotdownloader-path",
+        type=str,
+        help="The path to DepotDownloader executable. If not provided, will check local directory or prompt to download.",
     )
     parser.add_argument(
         "--files-to-disassemble",
@@ -766,6 +1048,7 @@ def main() -> None:
 
         output_path = os.path.join(
             script_dir,
+            "output",
             f"{platform_prefix}output_{timestamp}_{args.app}_{args.depot}_{args.manifest_id}",
         )
         info(f"Auto-generated output directory: {output_path}")
@@ -796,6 +1079,11 @@ def main() -> None:
             info(f"IDA Path: {config['ida_path']}")
         else:
             info("IDA Path: Not set")
+
+        if "depotdownloader_path" in config:
+            info(f"DepotDownloader Path: {config['depotdownloader_path']}")
+        else:
+            info("DepotDownloader Path: Not set")
 
         info("=== Files Configuration ===")
         files_to_disassemble = files_config.get("files_to_disassemble", {})
@@ -873,6 +1161,25 @@ def main() -> None:
     # Save IDA path to config
     config["ida_path"] = ida_path
 
+    # Ensure DepotDownloader is available
+    info("Checking for DepotDownloader...")
+
+    # Handle command-line argument for DepotDownloader path
+    if args.depotdownloader_path:
+        if os.path.exists(args.depotdownloader_path):
+            depotdownloader_path = args.depotdownloader_path
+            info(f"Using DepotDownloader from command line: {depotdownloader_path}")
+            config["depotdownloader_path"] = depotdownloader_path
+            save_config(config)
+        else:
+            error(f"DepotDownloader path does not exist: {args.depotdownloader_path}")
+            return
+    else:
+        depotdownloader_path = ensure_depotdownloader(config)
+        if not depotdownloader_path:
+            error("DepotDownloader is required but not available")
+            return
+
     # Determine if we should disassemble all files (need to do this before saving config)
     files_to_disassemble_arg = args.files_to_disassemble
     platform = args.platform
@@ -920,6 +1227,7 @@ def main() -> None:
 
     save_config(config)
     info(f"IDA path saved: {ida_path}")
+    info(f"DepotDownloader path saved: {depotdownloader_path}")
     verbose(f"Configuration saved with current run parameters")
 
     depot_downloader = DepotDownloader(
@@ -928,6 +1236,7 @@ def main() -> None:
         manifest_id=args.manifest_id,
         output_path=output_path,
         ida_path=ida_path,
+        depotdownloader_path=depotdownloader_path,
         files_to_disassemble=files_to_disassemble,
         jobs=args.jobs,
         disassemble_all=disassemble_all,
