@@ -1,6 +1,0 @@
-black
-pylint
-flake8
-coloredlogs
-tqdm
-psutil

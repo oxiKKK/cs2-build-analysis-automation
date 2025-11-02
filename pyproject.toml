@@ -1,0 +1,13 @@
+[project]
+name = "cs2-build-analysis-automation"
+version = "1.1.0"
+description = "Automation tool for downloading CS2 depot binaries and performing disassembly with IDA Pro"
+requires-python = ">=3.11"
+dependencies = [
+    "coloredlogs",
+    "tqdm",
+    "psutil",
+]
+
+[project.scripts]
+cs2-baa = "main:main"
