@@ -39,7 +39,7 @@ This tool can be used both for Linux and Windows binaries
 Create and activate virtual environment:
 
 ```bash
-uv venv; .venv/Scripts/activate; uv pip install -r requirements.txt
+uv venv; .venv/Scripts/activate; uv sync
 ```
 
 ### DepotDownloader Setup
